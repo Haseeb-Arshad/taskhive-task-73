@@ -1,74 +1,89 @@
 import type { Metadata, Viewport } from "next";
-import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://checkers-arena.app"),
   title: {
     default: "Checkers Arena",
     template: "%s • Checkers Arena",
   },
   description:
-    "A fast, fun, and polished checkers experience with responsive gameplay, social competition, and daily-play motivation.",
+    "A polished, responsive foundation for a fun, fast, and replayable checkers experience.",
   applicationName: "Checkers Arena",
   keywords: [
     "checkers",
     "draughts",
     "board game",
-    "strategy",
     "next.js",
-    "game",
+    "game ui",
+    "multiplayer",
   ],
   authors: [{ name: "Checkers Arena Team" }],
   creator: "Checkers Arena Team",
-  publisher: "Checkers Arena",
   robots: {
     index: true,
     follow: true,
+  },
+  openGraph: {
+    title: "Checkers Arena",
+    description:
+      "Play a modern checkers experience with smooth interactions and competitive progression.",
+    type: "website",
+    siteName: "Checkers Arena",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Checkers Arena",
+    description:
+      "A modern checkers game shell built for speed, polish, and long-term feature growth.",
   },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
+  viewportFit: "cover",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f6efe3" },
-    { media: "(prefers-color-scheme: dark)", color: "#0f0f12" },
+    { media: "(prefers-color-scheme: light)", color: "#f6f7fb" },
+    { media: "(prefers-color-scheme: dark)", color: "#090d18" },
   ],
-  colorScheme: "dark light",
 };
 
-type RootLayoutProps = {
-  children: ReactNode;
-};
-
-export default function RootLayout({ children }: RootLayoutProps) {
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
-      <body className="app-root antialiased">
-        <div className="app-shell">
-          <a className="skip-link" href="#main-content">
-            Skip to main content
-          </a>
+    <html lang="en" className="h-full scroll-smooth">
+      <body className="app-body antialiased">
+        <a href="#main-content" className="skip-link">
+          Skip to main content
+        </a>
 
-          <header className="app-header" role="banner">
-            <div className="app-header__brand" aria-label="Checkers Arena">
-              <span className="brand-mark" aria-hidden="true">
-                ◈
-              </span>
-              <div className="brand-copy">
-                <strong>Checkers Arena</strong>
-                <span>Fast matches • satisfying strategy • daily progression</span>
+        <div className="app-shell">
+          <div className="ambient ambient-top" aria-hidden="true" />
+          <div className="ambient ambient-bottom" aria-hidden="true" />
+
+          <header className="shell-header" role="banner">
+            <div className="shell-inner">
+              <div className="shell-brand" aria-label="Checkers Arena home">
+                <span className="brand-mark" aria-hidden="true" />
+                <span className="brand-text">Checkers Arena</span>
               </div>
+              <p className="status-chip" aria-label="Build status">
+                Foundation Ready
+              </p>
             </div>
           </header>
 
-          <main id="main-content" className="app-main" role="main">
-            {children}
+          <main id="main-content" className="shell-main" role="main">
+            <div className="shell-inner shell-content">{children}</div>
           </main>
 
-          <footer className="app-footer" role="contentinfo">
-            <p>Built for quick rounds, focused strategy, and everyday replay value.</p>
+          <footer className="shell-footer" role="contentinfo">
+            <div className="shell-inner footer-grid">
+              <p>Built for quick matches, satisfying motion, and long-term progression.</p>
+              <p>Responsive app shell • Production-ready scaffolding</p>
+            </div>
           </footer>
         </div>
       </body>
