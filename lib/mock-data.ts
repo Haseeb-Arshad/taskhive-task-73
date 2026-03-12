@@ -1,466 +1,306 @@
-export type PieceColor = "red" | "black";
+export type GameMode = 'single_ai' | 'local_two_player' | 'online_multiplayer';
+export type Difficulty = 'beginner' | 'intermediate' | 'advanced' | 'master' | 'legendary';
+export type ThemeOption = 'minimal' | 'classic_wood' | 'modern_bold' | 'dark_mode';
+export type MatchResult = 'win' | 'loss' | 'draw';
 
-export interface Piece {
+export type GameHistoryItem = {
   id: string;
-  color: PieceColor;
-  king: boolean;
-}
-
-export type Cell = Piece | null;
-export type Board = Cell[][];
-
-export interface Position {
-  row: number;
-  col: number;
-}
-
-export interface CheckersMove {
-  from: Position;
-  to: Position;
-  captures: Position[];
-  promotion?: boolean;
-}
-
-export type Difficulty = "easy" | "medium" | "hard";
-
-export interface LeaderboardEntry {
-  id: string;
-  name: string;
-  wins: number;
-  losses: number;
-  streak: number;
-  elo: number;
-}
-
-export interface MatchHistoryItem {
-  id: string;
-  playedAt: string;
-  winner: PieceColor | "draw";
+  mode: GameMode;
+  difficulty: Difficulty;
+  result: MatchResult;
   turns: number;
-  durationSec: number;
-  mode: "solo" | "local" | "online";
-}
-
-export interface StatsSnapshot {
-  gamesPlayed: number;
-  gamesWon: number;
-  winRate: number;
-  longestStreak: number;
-  averageGameSeconds: number;
-}
-
-export interface SavedGameState {
-  board: Board;
-  turn: PieceColor;
-  selected?: Position | null;
-  difficulty?: Difficulty;
-  history?: CheckersMove[];
-  timestamp: string;
-}
-
-export const BOARD_SIZE = 8;
-export const STORAGE_KEY_GAME = "checkers:active-game";
-export const STORAGE_KEY_STATS = "checkers:stats";
-
-const SCORE_WEIGHTS = {
-  piece: 10,
-  king: 16,
-  centerControl: 1,
-  mobility: 0.2,
+  capturedPieces: number;
+  kingsEarned: number;
+  playedAtIso: string;
+  opponentLabel: string;
 };
 
-const darkSquare = (row: number, col: number): boolean => (row + col) % 2 === 1;
-const inside = (row: number, col: number): boolean => row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
+export type LeaderboardEntry = {
+  rank: number;
+  player: string;
+  elo: number;
+  streak: number;
+  wins: number;
+  losses: number;
+};
 
-export function oppositeColor(color: PieceColor): PieceColor {
-  return color === "red" ? "black" : "red";
+export type PlayerStats = {
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  currentStreak: number;
+  bestStreak: number;
+  averageTurns: number;
+  kingsCrowned: number;
+  captures: number;
+};
+
+export type DailyChallenge = {
+  id: string;
+  title: string;
+  objective: string;
+  rewardXp: number;
+  difficulty: Difficulty;
+  recommendedMode: GameMode;
+};
+
+export type Achievement = {
+  id: string;
+  label: string;
+  description: string;
+  unlocked: boolean;
+  progress: number;
+  target: number;
+};
+
+export const GAME_MODES: ReadonlyArray<{ id: GameMode; label: string; subtitle: string }> = [
+  {
+    id: 'single_ai',
+    label: 'Single-player vs AI',
+    subtitle: 'Quick, strategic matches with adaptive bot personalities.'
+  },
+  {
+    id: 'local_two_player',
+    label: 'Two-player local (hot-seat)',
+    subtitle: 'Pass-and-play for fast head-to-head sessions on one device.'
+  },
+  {
+    id: 'online_multiplayer',
+    label: 'Online multiplayer',
+    subtitle: 'Compete globally, climb rankings, and build your reputation.'
+  }
+] as const;
+
+export const DIFFICULTIES: ReadonlyArray<{ id: Difficulty; label: string; depth: number }> = [
+  { id: 'beginner', label: 'Beginner', depth: 2 },
+  { id: 'intermediate', label: 'Intermediate', depth: 4 },
+  { id: 'advanced', label: 'Advanced', depth: 6 },
+  { id: 'master', label: 'Master', depth: 8 },
+  { id: 'legendary', label: 'Legendary', depth: 10 }
+] as const;
+
+export const THEMES: ReadonlyArray<{ id: ThemeOption; label: string }> = [
+  { id: 'minimal', label: 'Minimalist / Flat' },
+  { id: 'classic_wood', label: 'Classic Wooden Board' },
+  { id: 'modern_bold', label: 'Modern / Bold' },
+  { id: 'dark_mode', label: 'Dark Mode' }
+] as const;
+
+export const CHECKERS_TIPS: ReadonlyArray<string> = [
+  'Control the center early—diagonals from the middle create more tactical options.',
+  'Avoid exposing your back row too soon; it prevents easy king promotions.',
+  'Trade pieces when ahead, but avoid symmetrical trades when behind.',
+  'Force multi-jumps by baiting with a protected piece.',
+  'A king is strongest when supported—don’t send it deep without backup.'
+] as const;
+
+export const MOCK_HISTORY: ReadonlyArray<GameHistoryItem> = [
+  {
+    id: 'match_101',
+    mode: 'single_ai',
+    difficulty: 'advanced',
+    result: 'win',
+    turns: 39,
+    capturedPieces: 12,
+    kingsEarned: 2,
+    playedAtIso: '2026-01-08T20:10:00.000Z',
+    opponentLabel: 'AI • Rogue Strategist'
+  },
+  {
+    id: 'match_102',
+    mode: 'online_multiplayer',
+    difficulty: 'master',
+    result: 'loss',
+    turns: 46,
+    capturedPieces: 10,
+    kingsEarned: 1,
+    playedAtIso: '2026-01-09T18:25:00.000Z',
+    opponentLabel: 'NovaKnight'
+  },
+  {
+    id: 'match_103',
+    mode: 'local_two_player',
+    difficulty: 'intermediate',
+    result: 'win',
+    turns: 33,
+    capturedPieces: 12,
+    kingsEarned: 3,
+    playedAtIso: '2026-01-10T21:00:00.000Z',
+    opponentLabel: 'Local • Friend'
+  },
+  {
+    id: 'match_104',
+    mode: 'single_ai',
+    difficulty: 'master',
+    result: 'draw',
+    turns: 58,
+    capturedPieces: 11,
+    kingsEarned: 2,
+    playedAtIso: '2026-01-11T22:10:00.000Z',
+    opponentLabel: 'AI • Endgame Specialist'
+  },
+  {
+    id: 'match_105',
+    mode: 'online_multiplayer',
+    difficulty: 'advanced',
+    result: 'win',
+    turns: 37,
+    capturedPieces: 12,
+    kingsEarned: 2,
+    playedAtIso: '2026-01-12T19:45:00.000Z',
+    opponentLabel: 'PixelWarden'
+  }
+] as const;
+
+export const MOCK_LEADERBOARD: ReadonlyArray<LeaderboardEntry> = [
+  { rank: 1, player: 'ArcTactician', elo: 2284, streak: 9, wins: 192, losses: 41 },
+  { rank: 2, player: 'BlitzDiagonal', elo: 2219, streak: 5, wins: 181, losses: 53 },
+  { rank: 3, player: 'You', elo: 2176, streak: 4, wins: 74, losses: 22 },
+  { rank: 4, player: 'RooklessKing', elo: 2155, streak: 3, wins: 88, losses: 30 },
+  { rank: 5, player: 'NeonCheck', elo: 2112, streak: 2, wins: 102, losses: 48 }
+] as const;
+
+export const MOCK_DAILY_CHALLENGES: ReadonlyArray<DailyChallenge> = [
+  {
+    id: 'dc_control_center',
+    title: 'Center Control Sprint',
+    objective: 'Win a match while occupying at least 2 center squares for 10 turns.',
+    rewardXp: 250,
+    difficulty: 'intermediate',
+    recommendedMode: 'single_ai'
+  },
+  {
+    id: 'dc_king_rush',
+    title: 'King Rush',
+    objective: 'Crown 2 kings in a single game and still finish with a win.',
+    rewardXp: 350,
+    difficulty: 'advanced',
+    recommendedMode: 'online_multiplayer'
+  },
+  {
+    id: 'dc_clean_finish',
+    title: 'Clean Finish',
+    objective: 'Win while keeping at least 4 pieces alive.',
+    rewardXp: 200,
+    difficulty: 'beginner',
+    recommendedMode: 'local_two_player'
+  }
+] as const;
+
+export const MOCK_ACHIEVEMENTS: ReadonlyArray<Achievement> = [
+  {
+    id: 'ach_first_win',
+    label: 'First Blood',
+    description: 'Win your first checkers match.',
+    unlocked: true,
+    progress: 1,
+    target: 1
+  },
+  {
+    id: 'ach_streak_7',
+    label: 'On Fire',
+    description: 'Reach a 7-game winning streak.',
+    unlocked: false,
+    progress: 4,
+    target: 7
+  },
+  {
+    id: 'ach_king_50',
+    label: 'Royal Court',
+    description: 'Crown 50 kings across all modes.',
+    unlocked: false,
+    progress: 31,
+    target: 50
+  }
+] as const;
+
+export function getModeLabel(mode: GameMode): string {
+  return GAME_MODES.find((item) => item.id === mode)?.label ?? mode;
 }
 
-export function createInitialBoard(): Board {
-  const board: Board = Array.from({ length: BOARD_SIZE }, () => Array.from({ length: BOARD_SIZE }, () => null));
+export function getDifficultyWeight(difficulty: Difficulty): number {
+  return DIFFICULTIES.find((item) => item.id === difficulty)?.depth ?? 1;
+}
 
-  for (let row = 0; row < 3; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
-      if (darkSquare(row, col)) {
-        board[row][col] = { id: `b-${row}-${col}`, color: "black", king: false };
-      }
-    }
+export function getResultTone(result: MatchResult): 'positive' | 'negative' | 'neutral' {
+  if (result === 'win') return 'positive';
+  if (result === 'loss') return 'negative';
+  return 'neutral';
+}
+
+export function calculateStats(history: ReadonlyArray<GameHistoryItem>): PlayerStats {
+  const gamesPlayed = history.length;
+  const wins = history.filter((item) => item.result === 'win').length;
+  const losses = history.filter((item) => item.result === 'loss').length;
+  const draws = history.filter((item) => item.result === 'draw').length;
+  const captures = history.reduce((sum, item) => sum + item.capturedPieces, 0);
+  const kingsCrowned = history.reduce((sum, item) => sum + item.kingsEarned, 0);
+  const averageTurns = gamesPlayed
+    ? Math.round((history.reduce((sum, item) => sum + item.turns, 0) / gamesPlayed) * 10) / 10
+    : 0;
+
+  let currentStreak = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i].result !== 'win') break;
+    currentStreak += 1;
   }
 
-  for (let row = BOARD_SIZE - 3; row < BOARD_SIZE; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
-      if (darkSquare(row, col)) {
-        board[row][col] = { id: `r-${row}-${col}`, color: "red", king: false };
-      }
-    }
-  }
-
-  return board;
-}
-
-export function cloneBoard(board: Board): Board {
-  return board.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
-}
-
-export function pieceAt(board: Board, pos: Position): Piece | null {
-  if (!inside(pos.row, pos.col)) return null;
-  return board[pos.row][pos.col];
-}
-
-export function createPositionKey(pos: Position): string {
-  return `${pos.row}:${pos.col}`;
-}
-
-function directionalSteps(piece: Piece): Array<[number, number]> {
-  if (piece.king) return [[-1, -1], [-1, 1], [1, -1], [1, 1]];
-  return piece.color === "red" ? [[-1, -1], [-1, 1]] : [[1, -1], [1, 1]];
-}
-
-function getPieceMoves(board: Board, from: Position): CheckersMove[] {
-  const piece = pieceAt(board, from);
-  if (!piece) return [];
-
-  const moves: CheckersMove[] = [];
-  for (const [dr, dc] of directionalSteps(piece)) {
-    const nextRow = from.row + dr;
-    const nextCol = from.col + dc;
-
-    if (!inside(nextRow, nextCol)) continue;
-
-    const nextCell = board[nextRow][nextCol];
-    if (!nextCell) {
-      moves.push({
-        from,
-        to: { row: nextRow, col: nextCol },
-        captures: [],
-      });
-      continue;
-    }
-
-    if (nextCell.color === piece.color) continue;
-
-    const jumpRow = nextRow + dr;
-    const jumpCol = nextCol + dc;
-    if (inside(jumpRow, jumpCol) && board[jumpRow][jumpCol] === null) {
-      moves.push({
-        from,
-        to: { row: jumpRow, col: jumpCol },
-        captures: [{ row: nextRow, col: nextCol }],
-      });
-    }
-  }
-
-  return moves;
-}
-
-export function getLegalMovesForPiece(board: Board, from: Position, mustCapture = false): CheckersMove[] {
-  const piece = pieceAt(board, from);
-  if (!piece) return [];
-
-  const allMoves = getPieceMoves(board, from);
-  if (mustCapture) {
-    const captures = allMoves.filter((move) => move.captures.length > 0);
-    return captures;
-  }
-
-  return allMoves;
-}
-
-export function getAllLegalMoves(board: Board, color: PieceColor, enforceCapture = true): CheckersMove[] {
-  const aggregate: CheckersMove[] = [];
-
-  for (let row = 0; row < BOARD_SIZE; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
-      const piece = board[row][col];
-      if (!piece || piece.color !== color) continue;
-      aggregate.push(...getPieceMoves(board, { row, col }));
-    }
-  }
-
-  if (!enforceCapture) return aggregate;
-
-  const captures = aggregate.filter((move) => move.captures.length > 0);
-  return captures.length > 0 ? captures : aggregate;
-}
-
-export function applyMove(board: Board, move: CheckersMove): { board: Board; becameKing: boolean } {
-  const next = cloneBoard(board);
-  const piece = next[move.from.row][move.from.col];
-
-  if (!piece) {
-    return { board: next, becameKing: false };
-  }
-
-  next[move.from.row][move.from.col] = null;
-
-  for (const capture of move.captures) {
-    if (inside(capture.row, capture.col)) {
-      next[capture.row][capture.col] = null;
-    }
-  }
-
-  const promotionRow = piece.color === "red" ? 0 : BOARD_SIZE - 1;
-  const becameKing = !piece.king && move.to.row === promotionRow;
-
-  next[move.to.row][move.to.col] = {
-    ...piece,
-    king: piece.king || becameKing,
-  };
-
-  return { board: next, becameKing };
-}
-
-export function canContinueCapture(board: Board, at: Position): boolean {
-  const piece = pieceAt(board, at);
-  if (!piece) return false;
-
-  return getPieceMoves(board, at).some((move) => move.captures.length > 0);
-}
-
-export function getWinner(board: Board, currentTurn: PieceColor): PieceColor | "draw" | null {
-  const redMoves = getAllLegalMoves(board, "red", true).length;
-  const blackMoves = getAllLegalMoves(board, "black", true).length;
-
-  const redPieces = countPieces(board, "red");
-  const blackPieces = countPieces(board, "black");
-
-  if (redPieces.total === 0) return "black";
-  if (blackPieces.total === 0) return "red";
-
-  if (redMoves === 0 && blackMoves === 0) return "draw";
-
-  if (currentTurn === "red" && redMoves === 0) return "black";
-  if (currentTurn === "black" && blackMoves === 0) return "red";
-
-  return null;
-}
-
-export function countPieces(board: Board, color: PieceColor): { total: number; kings: number } {
-  let total = 0;
-  let kings = 0;
-
-  for (let row = 0; row < BOARD_SIZE; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
-      const piece = board[row][col];
-      if (!piece || piece.color !== color) continue;
-      total += 1;
-      if (piece.king) kings += 1;
-    }
-  }
-
-  return { total, kings };
-}
-
-export function evaluateBoard(board: Board, perspective: PieceColor): number {
-  let score = 0;
-  const centerMin = 2;
-  const centerMax = 5;
-
-  for (let row = 0; row < BOARD_SIZE; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
-      const piece = board[row][col];
-      if (!piece) continue;
-
-      const sign = piece.color === perspective ? 1 : -1;
-      score += SCORE_WEIGHTS.piece * sign;
-      if (piece.king) score += SCORE_WEIGHTS.king * sign;
-
-      if (row >= centerMin && row <= centerMax && col >= centerMin && col <= centerMax) {
-        score += SCORE_WEIGHTS.centerControl * sign;
-      }
-    }
-  }
-
-  const ownMobility = getAllLegalMoves(board, perspective, true).length;
-  const oppMobility = getAllLegalMoves(board, oppositeColor(perspective), true).length;
-  score += (ownMobility - oppMobility) * SCORE_WEIGHTS.mobility;
-
-  return score;
-}
-
-function chooseRandom<T>(items: T[]): T | null {
-  if (items.length === 0) return null;
-  const index = Math.floor(Math.random() * items.length);
-  return items[index] ?? null;
-}
-
-function minimax(board: Board, turn: PieceColor, depth: number, perspective: PieceColor, alpha: number, beta: number): number {
-  const winner = getWinner(board, turn);
-  if (winner) {
-    if (winner === "draw") return 0;
-    return winner === perspective ? 999 : -999;
-  }
-
-  if (depth === 0) return evaluateBoard(board, perspective);
-
-  const moves = getAllLegalMoves(board, turn, true);
-  if (moves.length === 0) {
-    return turn === perspective ? -999 : 999;
-  }
-
-  const maximizing = turn === perspective;
-  let bestScore = maximizing ? -Infinity : Infinity;
-  let localAlpha = alpha;
-  let localBeta = beta;
-
-  for (const move of moves) {
-    const applied = applyMove(board, move).board;
-    const score = minimax(applied, oppositeColor(turn), depth - 1, perspective, localAlpha, localBeta);
-
-    if (maximizing) {
-      bestScore = Math.max(bestScore, score);
-      localAlpha = Math.max(localAlpha, bestScore);
-      if (localBeta <= localAlpha) break;
+  let bestStreak = 0;
+  let run = 0;
+  for (const item of history) {
+    if (item.result === 'win') {
+      run += 1;
+      bestStreak = Math.max(bestStreak, run);
     } else {
-      bestScore = Math.min(bestScore, score);
-      localBeta = Math.min(localBeta, bestScore);
-      if (localBeta <= localAlpha) break;
+      run = 0;
     }
-  }
-
-  return bestScore;
-}
-
-export function chooseAIMove(board: Board, color: PieceColor, difficulty: Difficulty): CheckersMove | null {
-  const legalMoves = getAllLegalMoves(board, color, true);
-  if (legalMoves.length === 0) return null;
-
-  if (difficulty === "easy") {
-    return chooseRandom(legalMoves);
-  }
-
-  if (difficulty === "medium") {
-    const scored = legalMoves.map((move) => {
-      const { board: nextBoard, becameKing } = applyMove(board, move);
-      let score = evaluateBoard(nextBoard, color);
-      if (move.captures.length > 0) score += 7;
-      if (becameKing) score += 10;
-      return { move, score };
-    });
-
-    scored.sort((a, b) => b.score - a.score);
-    const topBand = scored.slice(0, Math.min(3, scored.length)).map((item) => item.move);
-    return chooseRandom(topBand);
-  }
-
-  const depth = 4;
-  let bestScore = -Infinity;
-  let bestMoves: CheckersMove[] = [];
-
-  for (const move of legalMoves) {
-    const nextBoard = applyMove(board, move).board;
-    const score = minimax(nextBoard, oppositeColor(color), depth - 1, color, -Infinity, Infinity);
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestMoves = [move];
-    } else if (score === bestScore) {
-      bestMoves.push(move);
-    }
-  }
-
-  return chooseRandom(bestMoves);
-}
-
-export function formatDuration(seconds: number): string {
-  const safe = Number.isFinite(seconds) && seconds >= 0 ? Math.floor(seconds) : 0;
-  const mins = Math.floor(safe / 60);
-  const rem = safe % 60;
-  return `${mins}:${rem.toString().padStart(2, "0")}`;
-}
-
-export function toPercent(value: number): string {
-  const safe = Number.isFinite(value) ? value : 0;
-  return `${Math.round(safe * 100)}%`;
-}
-
-export function saveJSON<T>(key: string, value: T): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Intentionally ignored to keep gameplay resilient in restricted environments.
-  }
-}
-
-export function loadJSON<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
-
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
-
-    const parsed = JSON.parse(raw) as T;
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-export const difficultyOptions: Array<{ value: Difficulty; label: string; description: string }> = [
-  { value: "easy", label: "Easy", description: "Relaxed pace with playful random choices." },
-  { value: "medium", label: "Medium", description: "Smart tactical moves with occasional surprises." },
-  { value: "hard", label: "Hard", description: "Competitive minimax strategy for serious matches." },
-];
-
-export const mockLeaderboard: LeaderboardEntry[] = [
-  { id: "p1", name: "NovaKnight", wins: 128, losses: 62, streak: 9, elo: 1640 },
-  { id: "p2", name: "BoardBlazer", wins: 104, losses: 55, streak: 4, elo: 1580 },
-  { id: "p3", name: "CrownChaser", wins: 93, losses: 58, streak: 2, elo: 1524 },
-  { id: "p4", name: "DiagonalDrift", wins: 81, losses: 61, streak: 6, elo: 1491 },
-  { id: "p5", name: "CrimsonTempo", wins: 76, losses: 69, streak: 1, elo: 1458 },
-];
-
-export const mockHistory: MatchHistoryItem[] = [
-  { id: "m-1005", playedAt: "2026-03-05T20:42:00.000Z", winner: "red", turns: 41, durationSec: 452, mode: "solo" },
-  { id: "m-1004", playedAt: "2026-03-05T18:08:00.000Z", winner: "black", turns: 38, durationSec: 407, mode: "local" },
-  { id: "m-1003", playedAt: "2026-03-04T22:13:00.000Z", winner: "draw", turns: 52, durationSec: 620, mode: "online" },
-  { id: "m-1002", playedAt: "2026-03-04T19:11:00.000Z", winner: "red", turns: 29, durationSec: 331, mode: "solo" },
-  { id: "m-1001", playedAt: "2026-03-03T21:51:00.000Z", winner: "black", turns: 36, durationSec: 398, mode: "solo" },
-];
-
-export const dailyTips: string[] = [
-  "Center control in the opening gives your pieces safer routes to promotion.",
-  "If a capture is forced, look two turns ahead before committing.",
-  "Trade only when it improves your king race or board shape.",
-  "Keep at least one back-row defender to prevent quick enemy kinging.",
-  "In tight endgames, king activity matters more than piece count.",
-];
-
-export function buildStatsFromHistory(history: MatchHistoryItem[]): StatsSnapshot {
-  if (history.length === 0) {
-    return {
-      gamesPlayed: 0,
-      gamesWon: 0,
-      winRate: 0,
-      longestStreak: 0,
-      averageGameSeconds: 0,
-    };
-  }
-
-  let gamesWon = 0;
-  let streak = 0;
-  let longestStreak = 0;
-  let totalDuration = 0;
-
-  for (const match of history) {
-    const won = match.winner === "red";
-    if (won) {
-      gamesWon += 1;
-      streak += 1;
-      longestStreak = Math.max(longestStreak, streak);
-    } else {
-      streak = 0;
-    }
-
-    totalDuration += match.durationSec;
   }
 
   return {
-    gamesPlayed: history.length,
-    gamesWon,
-    winRate: gamesWon / history.length,
-    longestStreak,
-    averageGameSeconds: Math.round(totalDuration / history.length),
+    gamesPlayed,
+    wins,
+    losses,
+    draws,
+    currentStreak,
+    bestStreak,
+    averageTurns,
+    kingsCrowned,
+    captures
   };
+}
+
+export function calculateWinRate(stats: Pick<PlayerStats, 'wins' | 'gamesPlayed'>): number {
+  if (!stats.gamesPlayed) return 0;
+  return Math.round((stats.wins / stats.gamesPlayed) * 1000) / 10;
+}
+
+export function getDailyChallengeByDate(dateIso: string): DailyChallenge {
+  const date = new Date(dateIso);
+  const daySeed = Number.isNaN(date.getTime())
+    ? 0
+    : Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 86400000;
+  const index = Math.abs(daySeed) % MOCK_DAILY_CHALLENGES.length;
+  return MOCK_DAILY_CHALLENGES[index];
+}
+
+export function getTipByIndex(index: number): string {
+  if (CHECKERS_TIPS.length === 0) return 'Keep pieces connected and watch for forced captures.';
+  const normalized = Math.abs(index) % CHECKERS_TIPS.length;
+  return CHECKERS_TIPS[normalized];
+}
+
+export function getCompletionMessage(streak: number): string {
+  if (streak >= 10) return 'Legendary form. You are dominating the board!';
+  if (streak >= 5) return 'Hot streak active. Keep pressing the advantage!';
+  if (streak >= 2) return 'Nice momentum. Queue another match and push your streak.';
+  return 'Solid match complete. Review the replay and sharpen your next opening.';
+}
+
+export function clampHistory(
+  history: ReadonlyArray<GameHistoryItem>,
+  maxItems: number
+): ReadonlyArray<GameHistoryItem> {
+  if (maxItems <= 0) return [];
+  return history.slice(-maxItems);
 }
