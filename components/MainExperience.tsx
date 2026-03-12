@@ -1,749 +1,780 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Player = "red" | "black";
-type GameMode = "ai" | "local" | "online";
-type Difficulty = "easy" | "medium" | "hard";
-type ThemeName = "wood" | "minimal" | "modern" | "dark";
-type MatchStatus = "idle" | "searching" | "connected";
+type GameMode = "single" | "local" | "online";
+type GameStatus = "playing" | "finished" | "waiting-online";
+type ThemeMode = "dark" | "light";
+type BoardStyle = "classic" | "modern" | "minimal";
 
 type Piece = {
-  id: number;
-  row: number;
-  col: number;
   player: Player;
   king: boolean;
 };
 
+type Cell = Piece | null;
+type Board = Cell[][];
+
 type Move = {
-  pieceId: number;
-  fromRow: number;
-  fromCol: number;
-  toRow: number;
-  toCol: number;
-  capture?: {
-    row: number;
-    col: number;
-    pieceId: number;
-  };
+  from: { r: number; c: number };
+  to: { r: number; c: number };
+  captured?: { r: number; c: number };
+  promotes: boolean;
 };
 
-type Snapshot = {
-  pieces: Piece[];
-  turn: Player;
-  note: string;
-  createdAt: string;
+type MatchHistory = {
+  id: string;
+  playedAt: string;
+  mode: GameMode;
+  difficulty: number;
+  winner: Player | "draw";
+  moves: number;
+  durationSec: number;
 };
 
-type Stats = {
+type PlayerStats = {
   gamesPlayed: number;
-  redWins: number;
-  blackWins: number;
-  capturesRed: number;
-  capturesBlack: number;
-  currentStreak: number;
+  winsRed: number;
+  winsBlack: number;
+  draws: number;
+  rankPoints: number;
+  streak: number;
   bestStreak: number;
-  xp: number;
-  level: number;
+  history: MatchHistory[];
 };
 
 const BOARD_SIZE = 8;
+const FILES = "abcdefgh";
+const STATS_KEY = "checkers_stats_v1";
 
-const themeStyles: Record<
-  ThemeName,
-  {
-    light: string;
-    dark: string;
-    board: string;
-    accent: string;
-    chip: string;
-  }
-> = {
-  wood: {
-    light: "bg-amber-100",
-    dark: "bg-amber-700",
-    board: "from-amber-900/70 to-amber-800/70",
-    accent: "text-amber-300",
-    chip: "border-amber-500/50 bg-amber-500/20 text-amber-100",
-  },
-  minimal: {
-    light: "bg-zinc-100",
-    dark: "bg-zinc-700",
-    board: "from-zinc-800/80 to-zinc-900/80",
-    accent: "text-cyan-300",
-    chip: "border-cyan-400/40 bg-cyan-400/10 text-cyan-100",
-  },
-  modern: {
-    light: "bg-fuchsia-100",
-    dark: "bg-indigo-700",
-    board: "from-indigo-900/80 to-fuchsia-900/80",
-    accent: "text-fuchsia-300",
-    chip: "border-fuchsia-400/40 bg-fuchsia-500/15 text-fuchsia-100",
-  },
-  dark: {
-    light: "bg-slate-500",
-    dark: "bg-slate-900",
-    board: "from-slate-800/90 to-black",
-    accent: "text-emerald-300",
-    chip: "border-emerald-500/40 bg-emerald-500/10 text-emerald-100",
-  },
-};
-
-const leaderboard = [
-  { rank: 1, name: "NovaKing", winRate: "82%", streak: 14 },
-  { rank: 2, name: "RookRider", winRate: "78%", streak: 10 },
-  { rank: 3, name: "You", winRate: "73%", streak: 6 },
-  { rank: 4, name: "CheckerM8", winRate: "71%", streak: 4 },
-];
-
-function clonePieces(pieces: Piece[]): Piece[] {
-  return pieces.map((piece) => ({ ...piece }));
-}
-
-function createInitialPieces(): Piece[] {
-  const pieces: Piece[] = [];
-  let idCounter = 1;
-
-  for (let row = 0; row < 3; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
-      if ((row + col) % 2 === 1) {
-        pieces.push({ id: idCounter++, row, col, player: "black", king: false });
-      }
-    }
-  }
-
-  for (let row = 5; row < BOARD_SIZE; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
-      if ((row + col) % 2 === 1) {
-        pieces.push({ id: idCounter++, row, col, player: "red", king: false });
-      }
-    }
-  }
-
-  return pieces;
-}
-
-function inBounds(row: number, col: number): boolean {
-  return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
-}
-
-function getPieceAt(pieces: Piece[], row: number, col: number): Piece | undefined {
-  return pieces.find((piece) => piece.row === row && piece.col === col);
-}
-
-function getDirections(piece: Piece): Array<[number, number]> {
-  if (piece.king) return [[-1, -1], [-1, 1], [1, -1], [1, 1]];
-  return piece.player === "red" ? [[-1, -1], [-1, 1]] : [[1, -1], [1, 1]];
-}
-
-function getLegalMovesForPiece(pieces: Piece[], piece: Piece, forceCapture: boolean): Move[] {
-  const captures: Move[] = [];
-  const normals: Move[] = [];
-  const dirs = getDirections(piece);
-
-  for (const [dr, dc] of dirs) {
-    const nextRow = piece.row + dr;
-    const nextCol = piece.col + dc;
-
-    if (!inBounds(nextRow, nextCol)) continue;
-
-    const adjacent = getPieceAt(pieces, nextRow, nextCol);
-
-    if (!adjacent) {
-      normals.push({
-        pieceId: piece.id,
-        fromRow: piece.row,
-        fromCol: piece.col,
-        toRow: nextRow,
-        toCol: nextCol,
-      });
-      continue;
-    }
-
-    if (adjacent.player !== piece.player) {
-      const jumpRow = nextRow + dr;
-      const jumpCol = nextCol + dc;
-      if (inBounds(jumpRow, jumpCol) && !getPieceAt(pieces, jumpRow, jumpCol)) {
-        captures.push({
-          pieceId: piece.id,
-          fromRow: piece.row,
-          fromCol: piece.col,
-          toRow: jumpRow,
-          toCol: jumpCol,
-          capture: { row: nextRow, col: nextCol, pieceId: adjacent.id },
-        });
-      }
-    }
-  }
-
-  return forceCapture ? captures : [...captures, ...normals];
-}
-
-function getAllLegalMovesForPlayer(pieces: Piece[], player: Player): Move[] {
-  const ownPieces = pieces.filter((piece) => piece.player === player);
-  const captures: Move[] = [];
-
-  for (const piece of ownPieces) {
-    captures.push(...getLegalMovesForPiece(pieces, piece, true));
-  }
-
-  if (captures.length > 0) return captures;
-
-  const normals: Move[] = [];
-  for (const piece of ownPieces) {
-    normals.push(...getLegalMovesForPiece(pieces, piece, false));
-  }
-
-  return normals;
-}
-
-function formatTurn(player: Player): string {
-  return player === "red" ? "Red" : "Black";
-}
-
-function chooseAiMove(moves: Move[], pieces: Piece[], difficulty: Difficulty): Move {
-  if (difficulty === "easy") {
-    return moves[Math.floor(Math.random() * moves.length)];
-  }
-
-  if (difficulty === "medium") {
-    const captures = moves.filter((move) => Boolean(move.capture));
-    const pool = captures.length > 0 ? captures : moves;
-    return pool[Math.floor(Math.random() * pool.length)];
-  }
-
-  let bestMove = moves[0];
-  let bestScore = -Infinity;
-
-  for (const move of moves) {
-    let score = 0;
-    if (move.capture) score += 5;
-
-    const movedPiece = pieces.find((piece) => piece.id === move.pieceId);
-    if (movedPiece && !movedPiece.king && movedPiece.player === "black" && move.toRow === BOARD_SIZE - 1) {
-      score += 4;
-    }
-
-    score += Math.random();
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestMove = move;
-    }
-  }
-
-  return bestMove;
-}
-
-const defaultStats: Stats = {
+const defaultStats: PlayerStats = {
   gamesPlayed: 0,
-  redWins: 0,
-  blackWins: 0,
-  capturesRed: 0,
-  capturesBlack: 0,
-  currentStreak: 0,
+  winsRed: 0,
+  winsBlack: 0,
+  draws: 0,
+  rankPoints: 120,
+  streak: 0,
   bestStreak: 0,
-  xp: 0,
-  level: 1,
+  history: [],
 };
+
+function inBounds(r: number, c: number) {
+  return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
+}
+
+function cloneBoard(board: Board): Board {
+  return board.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
+}
+
+function initialBoard(): Board {
+  const board: Board = Array.from({ length: BOARD_SIZE }, () =>
+    Array.from({ length: BOARD_SIZE }, () => null)
+  );
+
+  for (let r = 0; r < 3; r += 1) {
+    for (let c = 0; c < BOARD_SIZE; c += 1) {
+      if ((r + c) % 2 === 1) board[r][c] = { player: "black", king: false };
+    }
+  }
+
+  for (let r = 5; r < BOARD_SIZE; r += 1) {
+    for (let c = 0; c < BOARD_SIZE; c += 1) {
+      if ((r + c) % 2 === 1) board[r][c] = { player: "red", king: false };
+    }
+  }
+
+  return board;
+}
+
+function dirsFor(piece: Piece): Array<[number, number]> {
+  if (piece.king) return [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+  return piece.player === "red" ? [[-1, 1], [-1, -1]] : [[1, 1], [1, -1]];
+}
+
+function shouldPromote(piece: Piece, row: number) {
+  return !piece.king && ((piece.player === "red" && row === 0) || (piece.player === "black" && row === 7));
+}
+
+function movesForPiece(board: Board, r: number, c: number): { captures: Move[]; normals: Move[] } {
+  const piece = board[r][c];
+  if (!piece) return { captures: [], normals: [] };
+
+  const captures: Move[] = [];
+  const normals: Move[] = [];
+
+  for (const [dr, dc] of dirsFor(piece)) {
+    const nr = r + dr;
+    const nc = c + dc;
+    const jr = r + dr * 2;
+    const jc = c + dc * 2;
+
+    if (inBounds(nr, nc) && !board[nr][nc]) {
+      normals.push({
+        from: { r, c },
+        to: { r: nr, c: nc },
+        promotes: shouldPromote(piece, nr),
+      });
+    }
+
+    if (inBounds(jr, jc) && inBounds(nr, nc) && board[nr][nc] && board[nr][nc]?.player !== piece.player && !board[jr][jc]) {
+      captures.push({
+        from: { r, c },
+        to: { r: jr, c: jc },
+        captured: { r: nr, c: nc },
+        promotes: shouldPromote(piece, jr),
+      });
+    }
+  }
+
+  return { captures, normals };
+}
+
+function allLegalMoves(board: Board, player: Player, forcedFrom: { r: number; c: number } | null = null): Move[] {
+  const captures: Move[] = [];
+  const normals: Move[] = [];
+
+  const iterateCells = forcedFrom ? [forcedFrom] : Array.from({ length: 64 }, (_, i) => ({ r: Math.floor(i / 8), c: i % 8 }));
+
+  for (const { r, c } of iterateCells) {
+    const piece = board[r][c];
+    if (!piece || piece.player !== player) continue;
+    const moves = movesForPiece(board, r, c);
+    captures.push(...moves.captures);
+    normals.push(...moves.normals);
+  }
+
+  return captures.length > 0 ? captures : normals;
+}
+
+function applyMove(board: Board, move: Move): Board {
+  const next = cloneBoard(board);
+  const piece = next[move.from.r][move.from.c];
+  if (!piece) return next;
+
+  next[move.from.r][move.from.c] = null;
+  if (move.captured) next[move.captured.r][move.captured.c] = null;
+
+  next[move.to.r][move.to.c] = {
+    player: piece.player,
+    king: piece.king || move.promotes,
+  };
+
+  return next;
+}
+
+function countPieces(board: Board, player: Player) {
+  let count = 0;
+  let kings = 0;
+
+  for (const row of board) {
+    for (const cell of row) {
+      if (cell?.player === player) {
+        count += 1;
+        if (cell.king) kings += 1;
+      }
+    }
+  }
+
+  return { count, kings };
+}
+
+function posLabel(r: number, c: number) {
+  return `${FILES[c]}${BOARD_SIZE - r}`;
+}
+
+function boardKey(board: Board) {
+  return board
+    .map((row) =>
+      row
+        .map((cell) => {
+          if (!cell) return ".";
+          if (cell.player === "red") return cell.king ? "R" : "r";
+          return cell.king ? "B" : "b";
+        })
+        .join("")
+    )
+    .join("/");
+}
 
 export default function MainExperience() {
-  const [mode, setMode] = useState<GameMode>("ai");
-  const [difficulty, setDifficulty] = useState<Difficulty>("medium");
-  const [theme, setTheme] = useState<ThemeName>("wood");
+  const [mode, setMode] = useState<GameMode>("single");
+  const [difficulty, setDifficulty] = useState<number>(3);
+  const [theme, setTheme] = useState<ThemeMode>("dark");
+  const [boardStyle, setBoardStyle] = useState<BoardStyle>("classic");
 
-  const [pieces, setPieces] = useState<Piece[]>(() => createInitialPieces());
-  const [turn, setTurn] = useState<Player>("red");
-  const [selectedPieceId, setSelectedPieceId] = useState<number | null>(null);
-  const [legalMoves, setLegalMoves] = useState<Move[]>([]);
-  const [winner, setWinner] = useState<Player | null>(null);
-  const [thinking, setThinking] = useState(false);
-  const [matchStatus, setMatchStatus] = useState<MatchStatus>("idle");
-
-  const [history, setHistory] = useState<Snapshot[]>(() => [
-    {
-      pieces: createInitialPieces(),
-      turn: "red",
-      note: "Match started",
-      createdAt: new Date().toISOString(),
-    },
-  ]);
+  const [board, setBoard] = useState<Board>(initialBoard);
+  const [currentPlayer, setCurrentPlayer] = useState<Player>("red");
+  const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
+  const [forcedFrom, setForcedFrom] = useState<{ r: number; c: number } | null>(null);
+  const [status, setStatus] = useState<GameStatus>("playing");
+  const [winner, setWinner] = useState<Player | "draw" | null>(null);
+  const [info, setInfo] = useState("Capture to score big. Kings dominate the late game.");
+  const [moveLog, setMoveLog] = useState<string[]>([]);
+  const [frames, setFrames] = useState<Board[]>([initialBoard()]);
   const [replayIndex, setReplayIndex] = useState<number | null>(null);
+  const [replayRunning, setReplayRunning] = useState(false);
+  const [aiThinking, setAiThinking] = useState(false);
+  const [startedAt, setStartedAt] = useState<number>(Date.now());
+  const [queueJoined, setQueueJoined] = useState(false);
 
-  const [stats, setStats] = useState<Stats>(defaultStats);
-
-  const currentTheme = themeStyles[theme];
+  const [stats, setStats] = useState<PlayerStats>(defaultStats);
 
   useEffect(() => {
-    const raw = window.localStorage.getItem("checkers-fun-stats");
-    if (!raw) return;
     try {
-      const parsed = JSON.parse(raw) as Stats;
-      setStats({ ...defaultStats, ...parsed });
+      const saved = localStorage.getItem(STATS_KEY);
+      if (saved) setStats({ ...defaultStats, ...JSON.parse(saved) });
     } catch {
-      // ignore corrupted local storage
+      setStats(defaultStats);
     }
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem("checkers-fun-stats", JSON.stringify(stats));
+    localStorage.setItem(STATS_KEY, JSON.stringify(stats));
   }, [stats]);
 
-  const displaySnapshot = useMemo(() => {
-    if (replayIndex === null) {
-      return { pieces, turn, note: "Live", createdAt: new Date().toISOString() };
-    }
-    return history[replayIndex];
-  }, [history, pieces, replayIndex, turn]);
-
-  const canControlCurrentTurn =
-    replayIndex === null &&
-    !winner &&
-    !thinking &&
-    ((mode === "local" && matchStatus !== "searching") ||
-      (mode !== "local" && turn === "red" && matchStatus !== "searching"));
-
-  function addSnapshot(nextPieces: Piece[], nextTurn: Player, note: string) {
-    setHistory((prev) => [
-      ...prev,
-      {
-        pieces: clonePieces(nextPieces),
-        turn: nextTurn,
-        note,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
-  }
-
-  function resetGame(nextMode: GameMode = mode) {
-    const initial = createInitialPieces();
-    setPieces(initial);
-    setTurn("red");
-    setSelectedPieceId(null);
-    setLegalMoves([]);
-    setWinner(null);
-    setThinking(false);
-    setReplayIndex(null);
-    setHistory([
-      {
-        pieces: clonePieces(initial),
-        turn: "red",
-        note: "Match started",
-        createdAt: new Date().toISOString(),
-      },
-    ]);
-
-    if (nextMode === "online") {
-      setMatchStatus("searching");
-      window.setTimeout(() => setMatchStatus("connected"), 1400);
-    } else {
-      setMatchStatus("connected");
-    }
-  }
-
   useEffect(() => {
-    resetGame(mode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (replayIndex === null || !replayRunning) return;
+    const id = window.setInterval(() => {
+      setReplayIndex((prev) => {
+        if (prev === null) return prev;
+        if (prev >= frames.length - 1) {
+          setReplayRunning(false);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 550);
+
+    return () => window.clearInterval(id);
+  }, [replayIndex, replayRunning, frames.length]);
+
+  const displayedBoard = replayIndex === null ? board : frames[Math.min(replayIndex, frames.length - 1)];
+
+  const legalMoves = useMemo(() => {
+    if (status !== "playing") return [] as Move[];
+    return allLegalMoves(board, currentPlayer, forcedFrom);
+  }, [board, currentPlayer, forcedFrom, status]);
+
+  const selectedMoves = useMemo(() => {
+    if (!selected || replayIndex !== null || status !== "playing") return [] as Move[];
+    return legalMoves.filter((m) => m.from.r === selected.r && m.from.c === selected.c);
+  }, [selected, legalMoves, replayIndex, status]);
+
+  const selectedTargets = useMemo(() => new Set(selectedMoves.map((m) => `${m.to.r}-${m.to.c}`)), [selectedMoves]);
+
+  const freshMatch = useCallback(() => {
+    const b = initialBoard();
+    setBoard(b);
+    setCurrentPlayer("red");
+    setSelected(null);
+    setForcedFrom(null);
+    setStatus(mode === "online" ? "waiting-online" : "playing");
+    setWinner(null);
+    setMoveLog([]);
+    setFrames([b]);
+    setReplayIndex(null);
+    setReplayRunning(false);
+    setAiThinking(false);
+    setStartedAt(Date.now());
+    setInfo(mode === "online" ? "Online queue enabled. Local online matches arrive in a later step." : "New match started. Red moves first.");
   }, [mode]);
 
-  function finalizeWinner(foundWinner: Player, finalPieces: Piece[]) {
-    setWinner(foundWinner);
-    addSnapshot(finalPieces, foundWinner, `${formatTurn(foundWinner)} wins the match`);
+  const finalize = useCallback(
+    (resolvedWinner: Player | "draw") => {
+      setWinner(resolvedWinner);
+      setStatus("finished");
+      setInfo(resolvedWinner === "draw" ? "Draw! Try a sharper opening this round." : `${resolvedWinner === "red" ? "Red" : "Black"} wins!`);
 
-    setStats((prev) => {
-      const gamesPlayed = prev.gamesPlayed + 1;
-      const redWins = prev.redWins + (foundWinner === "red" ? 1 : 0);
-      const blackWins = prev.blackWins + (foundWinner === "black" ? 1 : 0);
-      const currentStreak = foundWinner === "red" ? prev.currentStreak + 1 : 0;
-      const bestStreak = Math.max(prev.bestStreak, currentStreak);
-      const gainedXp = foundWinner === "red" ? 40 : 20;
-      const xp = prev.xp + gainedXp;
-      const level = Math.floor(xp / 120) + 1;
+      const durationSec = Math.round((Date.now() - startedAt) / 1000);
+      setStats((prev) => {
+        const next = { ...prev };
+        next.gamesPlayed += 1;
 
-      return {
-        ...prev,
-        gamesPlayed,
-        redWins,
-        blackWins,
-        currentStreak,
-        bestStreak,
-        xp,
-        level,
-      };
-    });
-  }
+        if (resolvedWinner === "red") {
+          next.winsRed += 1;
+          next.streak += 1;
+          next.bestStreak = Math.max(next.bestStreak, next.streak);
+          next.rankPoints += 18 + (mode === "single" ? difficulty * 2 : 0);
+        } else if (resolvedWinner === "black") {
+          next.winsBlack += 1;
+          next.streak = 0;
+          next.rankPoints = Math.max(0, next.rankPoints - 8);
+        } else {
+          next.draws += 1;
+          next.rankPoints += 4;
+        }
 
-  function executeMove(move: Move, actingPlayer: Player) {
-    if (winner) return;
-
-    const movingPiece = pieces.find((piece) => piece.id === move.pieceId);
-    if (!movingPiece) return;
-
-    let nextPieces = pieces
-      .filter((piece) => !move.capture || piece.id !== move.capture.pieceId)
-      .map((piece) => {
-        if (piece.id !== move.pieceId) return piece;
-
-        const becameKing =
-          piece.king || (piece.player === "red" && move.toRow === 0) || (piece.player === "black" && move.toRow === BOARD_SIZE - 1);
-
-        return {
-          ...piece,
-          row: move.toRow,
-          col: move.toCol,
-          king: becameKing,
+        const entry: MatchHistory = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          playedAt: new Date().toISOString(),
+          mode,
+          difficulty,
+          winner: resolvedWinner,
+          moves: moveLog.length,
+          durationSec,
         };
+
+        next.history = [entry, ...next.history].slice(0, 16);
+        return next;
       });
+    },
+    [startedAt, mode, difficulty, moveLog.length]
+  );
 
-    if (move.capture) {
-      setStats((prev) => ({
-        ...prev,
-        capturesRed: prev.capturesRed + (actingPlayer === "red" ? 1 : 0),
-        capturesBlack: prev.capturesBlack + (actingPlayer === "black" ? 1 : 0),
-      }));
+  const afterTurnChecks = useCallback(
+    (nextBoard: Board, nextPlayer: Player, chain: { r: number; c: number } | null) => {
+      const red = countPieces(nextBoard, "red").count;
+      const black = countPieces(nextBoard, "black").count;
+
+      if (red === 0) return finalize("black");
+      if (black === 0) return finalize("red");
+
+      const moves = allLegalMoves(nextBoard, nextPlayer, chain);
+      if (moves.length === 0) {
+        finalize(nextPlayer === "red" ? "black" : "red");
+      }
+    },
+    [finalize]
+  );
+
+  const playMove = useCallback(
+    (move: Move, actor: "human" | "ai") => {
+      const nextBoard = applyMove(board, move);
+
+      const mover = currentPlayer;
+      const note = `${mover === "red" ? "Red" : "Black"}: ${posLabel(move.from.r, move.from.c)} → ${posLabel(move.to.r, move.to.c)}${move.captured ? " ×" : ""}${move.promotes ? " 👑" : ""}`;
+
+      setBoard(nextBoard);
+      setMoveLog((prev) => [...prev, note]);
+      setFrames((prev) => [...prev, cloneBoard(nextBoard)]);
+      setSelected(null);
+
+      const piece = nextBoard[move.to.r][move.to.c];
+      const nextCaptures = piece ? movesForPiece(nextBoard, move.to.r, move.to.c).captures : [];
+      const chainContinues = Boolean(move.captured && nextCaptures.length > 0);
+
+      if (chainContinues) {
+        setForcedFrom({ r: move.to.r, c: move.to.c });
+        setCurrentPlayer(mover);
+        setSelected({ r: move.to.r, c: move.to.c });
+        setInfo(`${mover === "red" ? "Red" : "Black"} must continue capturing.`);
+        afterTurnChecks(nextBoard, mover, { r: move.to.r, c: move.to.c });
+      } else {
+        const nextPlayer: Player = mover === "red" ? "black" : "red";
+        setForcedFrom(null);
+        setCurrentPlayer(nextPlayer);
+        setInfo(actor === "ai" ? "Your turn. Find a tactical capture." : `${nextPlayer === "red" ? "Red" : "Black"} to move.`);
+        afterTurnChecks(nextBoard, nextPlayer, null);
+      }
+    },
+    [board, currentPlayer, afterTurnChecks]
+  );
+
+  const evalBoard = (b: Board) => {
+    const red = countPieces(b, "red");
+    const black = countPieces(b, "black");
+    return (black.count - red.count) * 10 + (black.kings - red.kings) * 5;
+  };
+
+  const chooseAiMove = useCallback((): Move | null => {
+    const moves = allLegalMoves(board, "black", forcedFrom);
+    if (moves.length === 0) return null;
+
+    if (difficulty <= 1) {
+      return moves[Math.floor(Math.random() * moves.length)];
     }
 
-    const moved = nextPieces.find((piece) => piece.id === move.pieceId);
-    const continuingCaptures = moved ? getLegalMovesForPiece(nextPieces, moved, true) : [];
+    const scored = moves.map((move) => {
+      const b1 = applyMove(board, move);
+      let score = evalBoard(b1);
+      if (move.captured) score += 12;
+      if (move.promotes) score += 18;
 
-    const note = `${formatTurn(actingPlayer)}: ${move.fromRow + 1},${move.fromCol + 1} → ${move.toRow + 1},${move.toCol + 1}${
-      move.capture ? " (capture)" : ""
-    }`;
+      if (difficulty >= 3) {
+        const redResponses = allLegalMoves(b1, "red", null);
+        const redCaptureThreat = redResponses.filter((m) => Boolean(m.captured)).length;
+        score -= redCaptureThreat * 4;
+      }
 
-    if (move.capture && continuingCaptures.length > 0) {
-      setPieces(nextPieces);
-      setSelectedPieceId(move.pieceId);
-      setLegalMoves(continuingCaptures);
-      addSnapshot(nextPieces, actingPlayer, `${note} | combo continues`);
-      return;
-    }
+      if (difficulty >= 4) {
+        const redResponses = allLegalMoves(b1, "red", null);
+        if (redResponses.length > 0) {
+          const worstForBlack = Math.min(
+            ...redResponses.map((rm) => {
+              const b2 = applyMove(b1, rm);
+              return evalBoard(b2);
+            })
+          );
+          score += worstForBlack * 0.6;
+        }
+      }
 
-    const nextTurn: Player = actingPlayer === "red" ? "black" : "red";
-    const nextMoves = getAllLegalMovesForPlayer(nextPieces, nextTurn);
+      if (difficulty >= 5) {
+        const redResponses = allLegalMoves(b1, "red", null);
+        if (redResponses.length > 0) {
+          const pessimistic = Math.min(
+            ...redResponses.map((rm) => {
+              const b2 = applyMove(b1, rm);
+              const blackReplies = allLegalMoves(b2, "black", null);
+              if (blackReplies.length === 0) return evalBoard(b2) - 25;
+              const bestReply = Math.max(...blackReplies.map((br) => evalBoard(applyMove(b2, br))));
+              return bestReply;
+            })
+          );
+          score += pessimistic * 0.45;
+        }
+      }
 
-    setPieces(nextPieces);
-    setTurn(nextTurn);
-    setSelectedPieceId(null);
-    setLegalMoves([]);
-    addSnapshot(nextPieces, nextTurn, note);
+      return { move, score };
+    });
 
-    const redCount = nextPieces.filter((piece) => piece.player === "red").length;
-    const blackCount = nextPieces.filter((piece) => piece.player === "black").length;
-
-    if (redCount === 0) {
-      finalizeWinner("black", nextPieces);
-      return;
-    }
-    if (blackCount === 0) {
-      finalizeWinner("red", nextPieces);
-      return;
-    }
-    if (nextMoves.length === 0) {
-      finalizeWinner(actingPlayer, nextPieces);
-    }
-  }
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, Math.max(1, Math.min(3, scored.length)));
+    return top[Math.floor(Math.random() * top.length)].move;
+  }, [board, difficulty, forcedFrom]);
 
   useEffect(() => {
-    if (replayIndex !== null || winner || thinking) return;
-    if (mode === "local") return;
-    if (turn !== "black") return;
-    if (matchStatus === "searching") return;
+    if (mode !== "single" || currentPlayer !== "black" || status !== "playing" || replayIndex !== null) return;
 
-    const legal = getAllLegalMovesForPlayer(pieces, "black");
-    if (legal.length === 0) {
-      finalizeWinner("red", pieces);
+    setAiThinking(true);
+    const id = window.setTimeout(() => {
+      const move = chooseAiMove();
+      setAiThinking(false);
+      if (!move) {
+        finalize("red");
+        return;
+      }
+      playMove(move, "ai");
+    }, 420 + difficulty * 120);
+
+    return () => window.clearTimeout(id);
+  }, [mode, currentPlayer, status, replayIndex, chooseAiMove, playMove, difficulty, finalize]);
+
+  useEffect(() => {
+    if (mode === "online") {
+      setStatus("waiting-online");
+      setInfo("Online matchmaking is in beta. You can still explore replays, stats, and style presets.");
+    } else if (status === "waiting-online") {
+      setStatus("playing");
+      setInfo("Mode switched. New match ready.");
+    }
+  }, [mode, status]);
+
+  const onCellClick = (r: number, c: number) => {
+    if ((r + c) % 2 === 0) return;
+    if (replayIndex !== null) return setInfo("Exit replay mode to continue playing.");
+    if (mode === "online") return setInfo("Online queue is not live yet in this step. Try Single Player or Local.");
+    if (status !== "playing") return;
+    if (aiThinking && mode === "single" && currentPlayer === "black") return;
+
+    const piece = board[r][c];
+    const isCurrentPlayers = piece?.player === currentPlayer;
+
+    if (forcedFrom && (r !== forcedFrom.r || c !== forcedFrom.c) && isCurrentPlayers) {
+      setInfo("Capture chain active: continue with the highlighted piece.");
       return;
     }
 
-    setThinking(true);
-    const delay = mode === "online" ? 1000 : 550;
+    if (selected) {
+      const move = selectedMoves.find((m) => m.to.r === r && m.to.c === c);
+      if (move) {
+        playMove(move, "human");
+        return;
+      }
+    }
 
-    const timer = window.setTimeout(() => {
-      const picked = chooseAiMove(legal, pieces, difficulty);
-      executeMove(picked, "black");
-      setThinking(false);
-    }, delay);
-
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turn, mode, difficulty, matchStatus, replayIndex, winner, pieces, thinking]);
-
-  function handleSquareClick(row: number, col: number) {
-    if (!canControlCurrentTurn) return;
-
-    const targetMove = legalMoves.find((move) => move.toRow === row && move.toCol === col);
-    if (selectedPieceId !== null && targetMove) {
-      executeMove(targetMove, turn);
+    if (!isCurrentPlayers) {
+      setInfo("Select one of your pieces.");
       return;
     }
 
-    const piece = getPieceAt(pieces, row, col);
-    if (!piece || piece.player !== turn) {
-      setSelectedPieceId(null);
-      setLegalMoves([]);
+    const hasMove = legalMoves.some((m) => m.from.r === r && m.from.c === c);
+    if (!hasMove) {
+      setInfo("That piece is blocked. Try another lane.");
       return;
     }
 
-    const allMoves = getAllLegalMovesForPlayer(pieces, turn);
-    const forceCapture = allMoves.some((move) => Boolean(move.capture));
-    const pieceMoves = getLegalMovesForPiece(pieces, piece, forceCapture);
+    setSelected({ r, c });
+  };
 
-    if (pieceMoves.length === 0) {
-      setSelectedPieceId(null);
-      setLegalMoves([]);
-      return;
-    }
+  const winRate = stats.gamesPlayed ? Math.round((stats.winsRed / stats.gamesPlayed) * 100) : 0;
+  const recentToday = stats.history.filter((h) => h.playedAt.slice(0, 10) === new Date().toISOString().slice(0, 10)).length;
 
-    setSelectedPieceId(piece.id);
-    setLegalMoves(pieceMoves);
-  }
+  const tone = theme === "dark" ? "bg-slate-950 text-slate-100" : "bg-slate-100 text-slate-900";
+  const card = theme === "dark" ? "bg-slate-900/80 border-slate-800" : "bg-white border-slate-200";
 
-  const redCount = displaySnapshot.pieces.filter((piece) => piece.player === "red").length;
-  const blackCount = displaySnapshot.pieces.filter((piece) => piece.player === "black").length;
+  const darkSquareClass =
+    boardStyle === "classic"
+      ? "bg-gradient-to-br from-amber-800 to-amber-700"
+      : boardStyle === "modern"
+      ? "bg-gradient-to-br from-fuchsia-600 to-violet-700"
+      : "bg-slate-700";
+
+  const lightSquareClass =
+    boardStyle === "classic"
+      ? "bg-gradient-to-br from-amber-200 to-amber-100"
+      : boardStyle === "modern"
+      ? "bg-gradient-to-br from-cyan-200 to-indigo-100"
+      : "bg-slate-200";
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <section className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className={`text-xs font-semibold uppercase tracking-[0.25em] ${currentTheme.accent}`}>Daily Match Arena</p>
-            <h1 className="mt-2 text-3xl font-bold sm:text-4xl">Checkers Pulse</h1>
-            <p className="mt-2 max-w-2xl text-sm text-slate-300">
-              Fast matches, satisfying captures, and progression you can feel. Switch between AI, local hot-seat,
-              and online-style duels with replay and leaderboard momentum.
-            </p>
+    <main className={`min-h-screen w-full ${tone}`}>
+      <section className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6 lg:px-8">
+        <header className={`rounded-2xl border p-5 md:p-6 ${card}`}>
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-sky-400">Daily Checkers Arena</p>
+              <h1 className="text-2xl font-bold md:text-3xl">Fast matches. Satisfying captures. Come back tomorrow stronger.</h1>
+              <p className="mt-1 text-sm text-slate-400">Modes: AI, local hot-seat, and online beta flow. Includes 5 AI levels, replay, and progression tracking.</p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+                className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-medium text-sky-300 hover:bg-sky-500/20"
+              >
+                {theme === "dark" ? "Switch to Light" : "Switch to Dark"}
+              </button>
+              <button
+                onClick={freshMatch}
+                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20"
+              >
+                New Match
+              </button>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
-            <div className={`rounded-xl border px-3 py-2 ${currentTheme.chip}`}>
-              <p className="text-xs opacity-80">Level</p>
-              <p className="text-lg font-bold">{stats.level}</p>
+        </header>
+
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <section className={`rounded-2xl border p-4 md:p-5 ${card}`}>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">Current turn: {currentPlayer === "red" ? "Red" : "Black"}</p>
+                <p className="text-xs text-slate-400">{status === "finished" ? "Game over" : info}</p>
+              </div>
+              <div className="text-xs text-slate-400">Moves: {moveLog.length}</div>
             </div>
-            <div className={`rounded-xl border px-3 py-2 ${currentTheme.chip}`}>
-              <p className="text-xs opacity-80">XP</p>
-              <p className="text-lg font-bold">{stats.xp}</p>
+
+            <div className="mx-auto grid w-full max-w-[680px] grid-cols-8 overflow-hidden rounded-xl border border-slate-700/50 shadow-2xl">
+              {displayedBoard.map((row, r) =>
+                row.map((cell, c) => {
+                  const dark = (r + c) % 2 === 1;
+                  const isSelected = selected?.r === r && selected?.c === c && replayIndex === null;
+                  const isTarget = selectedTargets.has(`${r}-${c}`) && replayIndex === null;
+                  const forced = forcedFrom?.r === r && forcedFrom?.c === c && replayIndex === null;
+
+                  return (
+                    <button
+                      key={`${r}-${c}-${boardKey(displayedBoard)}`}
+                      onClick={() => onCellClick(r, c)}
+                      className={`relative aspect-square select-none ${dark ? darkSquareClass : lightSquareClass} ${dark ? "cursor-pointer" : "cursor-default"} ${isSelected ? "ring-4 ring-yellow-300/80" : ""}`}
+                      aria-label={`cell ${r}-${c}`}
+                    >
+                      {isTarget && <span className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lime-300 shadow-lg" />}
+                      {forced && <span className="absolute inset-1 animate-pulse rounded-md border-2 border-yellow-300/90" />}
+
+                      {cell && (
+                        <span
+                          className={`absolute left-1/2 top-1/2 block h-[74%] w-[74%] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow-lg transition-transform duration-150 ${
+                            cell.player === "red"
+                              ? "border-rose-300 bg-gradient-to-b from-rose-500 to-rose-700"
+                              : "border-slate-300 bg-gradient-to-b from-slate-700 to-slate-900"
+                          } ${isSelected ? "scale-105" : ""}`}
+                        >
+                          {cell.king && (
+                            <span className="absolute inset-0 grid place-items-center text-lg font-bold text-yellow-200 drop-shadow">♛</span>
+                          )}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })
+              )}
             </div>
-            <div className={`rounded-xl border px-3 py-2 ${currentTheme.chip}`}>
-              <p className="text-xs opacity-80">Best Streak</p>
-              <p className="text-lg font-bold">{stats.bestStreak}</p>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <span className="rounded-md bg-slate-800/60 px-2 py-1">Red = You</span>
+              <span className="rounded-md bg-slate-800/60 px-2 py-1">Mandatory captures enabled</span>
+              <span className="rounded-md bg-slate-800/60 px-2 py-1">Kings move both directions</span>
+              {aiThinking && <span className="rounded-md bg-indigo-600/20 px-2 py-1 text-indigo-300">AI is thinking…</span>}
             </div>
-          </div>
+          </section>
+
+          <aside className="space-y-4">
+            <section className={`rounded-2xl border p-4 ${card}`}>
+              <h2 className="text-sm font-semibold">Match Setup</h2>
+              <div className="mt-3 grid gap-2">
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  {[
+                    { id: "single", label: "Single vs AI" },
+                    { id: "local", label: "Local 2P" },
+                    { id: "online", label: "Online Beta" },
+                  ].map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => setMode(m.id as GameMode)}
+                      className={`rounded-lg border px-2 py-2 ${mode === m.id ? "border-sky-400 bg-sky-500/20 text-sky-200" : "border-slate-600 text-slate-300 hover:bg-slate-800/40"}`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="mt-2 text-xs text-slate-400">AI Difficulty: {difficulty}/5</label>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  value={difficulty}
+                  disabled={mode !== "single"}
+                  onChange={(e) => setDifficulty(Number(e.target.value))}
+                  className="w-full accent-sky-400 disabled:opacity-40"
+                />
+
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  {(["classic", "modern", "minimal"] as BoardStyle[]).map((style) => (
+                    <button
+                      key={style}
+                      onClick={() => setBoardStyle(style)}
+                      className={`rounded-lg border px-2 py-2 capitalize ${boardStyle === style ? "border-amber-400 bg-amber-500/20 text-amber-100" : "border-slate-600 text-slate-300 hover:bg-slate-800/40"}`}
+                    >
+                      {style}
+                    </button>
+                  ))}
+                </div>
+
+                {mode === "online" && (
+                  <div className="mt-2 rounded-lg border border-violet-500/40 bg-violet-500/10 p-3 text-xs text-violet-200">
+                    <p className="font-medium">Online queue state</p>
+                    <p className="mt-1 text-violet-200/80">Multiplayer transport is staged for a later step. This panel shows edge-state behavior.</p>
+                    <button
+                      onClick={() => setQueueJoined((q) => !q)}
+                      className="mt-2 rounded-md border border-violet-300/40 px-2 py-1 hover:bg-violet-400/20"
+                    >
+                      {queueJoined ? "Leave Queue" : "Join Queue"}
+                    </button>
+                  </div>
+                )}
+
+                {winner && (
+                  <div className="mt-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">
+                    Result: {winner === "draw" ? "Draw" : `${winner === "red" ? "Red" : "Black"} wins`}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className={`rounded-2xl border p-4 ${card}`}>
+              <h2 className="text-sm font-semibold">Replay & Move History</h2>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                <button
+                  onClick={() => {
+                    setReplayIndex(0);
+                    setReplayRunning(false);
+                  }}
+                  disabled={frames.length < 2}
+                  className="rounded-md border border-slate-600 px-2 py-1 hover:bg-slate-800/40 disabled:opacity-40"
+                >
+                  Start Replay
+                </button>
+                <button
+                  onClick={() => setReplayRunning((p) => !p)}
+                  disabled={replayIndex === null}
+                  className="rounded-md border border-slate-600 px-2 py-1 hover:bg-slate-800/40 disabled:opacity-40"
+                >
+                  {replayRunning ? "Pause" : "Play"}
+                </button>
+                <button
+                  onClick={() => setReplayIndex((i) => (i === null ? null : Math.max(0, i - 1)))}
+                  disabled={replayIndex === null}
+                  className="rounded-md border border-slate-600 px-2 py-1 hover:bg-slate-800/40 disabled:opacity-40"
+                >
+                  ◀
+                </button>
+                <button
+                  onClick={() => setReplayIndex((i) => (i === null ? null : Math.min(frames.length - 1, i + 1)))}
+                  disabled={replayIndex === null}
+                  className="rounded-md border border-slate-600 px-2 py-1 hover:bg-slate-800/40 disabled:opacity-40"
+                >
+                  ▶
+                </button>
+                <button
+                  onClick={() => {
+                    setReplayIndex(null);
+                    setReplayRunning(false);
+                  }}
+                  disabled={replayIndex === null}
+                  className="rounded-md border border-rose-500/40 px-2 py-1 text-rose-200 hover:bg-rose-500/20 disabled:opacity-40"
+                >
+                  Exit Replay
+                </button>
+              </div>
+
+              <p className="mt-2 text-xs text-slate-400">Frame: {replayIndex === null ? "Live" : `${replayIndex + 1}/${frames.length}`}</p>
+
+              <div className="mt-3 max-h-44 overflow-auto rounded-lg border border-slate-700/60 p-2 text-xs">
+                {moveLog.length === 0 ? (
+                  <p className="text-slate-500">No moves yet.</p>
+                ) : (
+                  <ol className="space-y-1">
+                    {moveLog.map((item, idx) => (
+                      <li key={`${item}-${idx}`} className="flex items-center justify-between rounded-md px-1 py-0.5 hover:bg-slate-800/40">
+                        <span>{idx + 1}. {item}</span>
+                        <button
+                          onClick={() => {
+                            setReplayIndex(idx + 1);
+                            setReplayRunning(false);
+                          }}
+                          className="text-[10px] text-sky-300"
+                        >
+                          jump
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            </section>
+
+            <section className={`rounded-2xl border p-4 ${card}`}>
+              <h2 className="text-sm font-semibold">Progression & Stats</h2>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-lg border border-slate-700 p-2">Games: <strong>{stats.gamesPlayed}</strong></div>
+                <div className="rounded-lg border border-slate-700 p-2">Win rate: <strong>{winRate}%</strong></div>
+                <div className="rounded-lg border border-slate-700 p-2">Streak: <strong>{stats.streak}</strong></div>
+                <div className="rounded-lg border border-slate-700 p-2">Rank: <strong>{stats.rankPoints}</strong></div>
+              </div>
+
+              <div className="mt-3">
+                <p className="text-xs text-slate-400">Daily missions</p>
+                <ul className="mt-1 space-y-1 text-xs">
+                  <li className="rounded-md border border-slate-700 px-2 py-1">
+                    Play 3 matches today: {Math.min(3, recentToday)}/3 {recentToday >= 3 ? "✅" : "⏳"}
+                  </li>
+                  <li className="rounded-md border border-slate-700 px-2 py-1">
+                    Reach 150 rank points: {Math.min(stats.rankPoints, 150)}/150 {stats.rankPoints >= 150 ? "✅" : "⏳"}
+                  </li>
+                </ul>
+              </div>
+
+              <div className="mt-3 max-h-28 overflow-auto rounded-lg border border-slate-700 p-2 text-xs">
+                {stats.history.length === 0 ? (
+                  <p className="text-slate-500">No completed games yet.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {stats.history.slice(0, 6).map((h) => (
+                      <li key={h.id} className="rounded-md px-1 py-0.5 hover:bg-slate-800/40">
+                        {new Date(h.playedAt).toLocaleDateString()} • {h.mode} • {h.winner} • {h.moves} moves
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+          </aside>
         </div>
       </section>
-
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(320px,1fr)]">
-        <section className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl backdrop-blur sm:p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex h-3 w-3 rounded-full bg-emerald-400" />
-              <p className="text-sm text-slate-200">
-                {winner
-                  ? `${formatTurn(winner)} won this match`
-                  : matchStatus === "searching"
-                    ? "Finding an online opponent..."
-                    : thinking
-                      ? "Opponent is thinking..."
-                      : `${formatTurn(displaySnapshot.turn)} to move`}
-              </p>
-            </div>
-            {replayIndex !== null && (
-              <button
-                onClick={() => setReplayIndex(null)}
-                className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
-              >
-                Resume Live
-              </button>
-            )}
-          </div>
-
-          <div className={`rounded-2xl border border-white/10 bg-gradient-to-br p-3 ${currentTheme.board}`}>
-            <div className="mx-auto grid aspect-square w-full max-w-[640px] grid-cols-8 overflow-hidden rounded-xl border border-black/40 shadow-2xl">
-              {Array.from({ length: BOARD_SIZE * BOARD_SIZE }).map((_, index) => {
-                const row = Math.floor(index / BOARD_SIZE);
-                const col = index % BOARD_SIZE;
-                const isDark = (row + col) % 2 === 1;
-                const piece = getPieceAt(displaySnapshot.pieces, row, col);
-                const selected = piece?.id === selectedPieceId && replayIndex === null;
-                const isMoveTarget = legalMoves.some((move) => move.toRow === row && move.toCol === col) && replayIndex === null;
-
-                return (
-                  <button
-                    key={`${row}-${col}`}
-                    type="button"
-                    onClick={() => handleSquareClick(row, col)}
-                    className={`relative flex items-center justify-center transition ${
-                      isDark ? currentTheme.dark : currentTheme.light
-                    } ${isMoveTarget ? "ring-2 ring-emerald-400 ring-inset" : ""}`}
-                    aria-label={`Square ${row + 1}, ${col + 1}`}
-                    disabled={!isDark || !canControlCurrentTurn}
-                  >
-                    {piece && (
-                      <span
-                        className={`relative flex h-[72%] w-[72%] items-center justify-center rounded-full border-2 text-sm font-extrabold shadow-md transition-transform ${
-                          piece.player === "red"
-                            ? "border-rose-900 bg-gradient-to-b from-rose-400 to-rose-700 text-white"
-                            : "border-slate-800 bg-gradient-to-b from-slate-200 to-slate-500 text-slate-900"
-                        } ${selected ? "scale-110 ring-2 ring-cyan-300" : ""}`}
-                      >
-                        {piece.king ? "♔" : ""}
-                      </span>
-                    )}
-                    {isMoveTarget && !piece && <span className="h-3 w-3 rounded-full bg-emerald-300" />}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-            <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-3">
-              <p className="text-xs text-rose-100/80">Red pieces</p>
-              <p className="text-xl font-bold text-rose-100">{redCount}</p>
-            </div>
-            <div className="rounded-xl border border-slate-300/30 bg-slate-500/10 p-3">
-              <p className="text-xs text-slate-200/80">Black pieces</p>
-              <p className="text-xl font-bold text-slate-100">{blackCount}</p>
-            </div>
-            <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-3">
-              <p className="text-xs text-cyan-100/80">Moves</p>
-              <p className="text-xl font-bold text-cyan-100">{Math.max(history.length - 1, 0)}</p>
-            </div>
-            <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-3">
-              <p className="text-xs text-emerald-100/80">Streak</p>
-              <p className="text-xl font-bold text-emerald-100">{stats.currentStreak}</p>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-100">Game History & Replay</h2>
-              <p className="text-xs text-slate-400">{history.length} snapshots</p>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={Math.max(history.length - 1, 0)}
-              value={replayIndex ?? history.length - 1}
-              onChange={(event) => setReplayIndex(Number(event.target.value))}
-              className="w-full accent-cyan-400"
-            />
-            <div className="mt-2 max-h-36 space-y-1 overflow-auto pr-1 text-xs text-slate-300">
-              {history.map((step, index) => (
-                <button
-                  key={`${step.createdAt}-${index}`}
-                  onClick={() => setReplayIndex(index)}
-                  className={`block w-full rounded-md px-2 py-1 text-left transition hover:bg-white/10 ${
-                    replayIndex === index ? "bg-white/15 text-white" : ""
-                  }`}
-                >
-                  #{index}: {step.note}
-                </button>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <aside className="space-y-4">
-          <section className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl backdrop-blur">
-            <h2 className="mb-3 text-lg font-semibold">Match Setup</h2>
-            <div className="space-y-3 text-sm">
-              <label className="block">
-                <span className="mb-1 block text-slate-300">Mode</span>
-                <select
-                  value={mode}
-                  onChange={(e) => setMode(e.target.value as GameMode)}
-                  className="w-full rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-slate-100 outline-none ring-cyan-400/40 focus:ring"
-                >
-                  <option value="ai">Single-player vs AI</option>
-                  <option value="local">Two-player local (hot-seat)</option>
-                  <option value="online">Online multiplayer (simulated)</option>
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="mb-1 block text-slate-300">Difficulty</span>
-                <select
-                  value={difficulty}
-                  onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-                  disabled={mode === "local"}
-                  className="w-full rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-slate-100 outline-none ring-cyan-400/40 focus:ring disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <option value="easy">Easy</option>
-                  <option value="medium">Medium</option>
-                  <option value="hard">Hard</option>
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="mb-1 block text-slate-300">Theme</span>
-                <select
-                  value={theme}
-                  onChange={(e) => setTheme(e.target.value as ThemeName)}
-                  className="w-full rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-slate-100 outline-none ring-cyan-400/40 focus:ring"
-                >
-                  <option value="wood">Classic wooden board</option>
-                  <option value="minimal">Minimalist flat</option>
-                  <option value="modern">Modern bold colors</option>
-                  <option value="dark">Dark mode</option>
-                </select>
-              </label>
-
-              <button
-                onClick={() => resetGame(mode)}
-                className="w-full rounded-lg bg-cyan-500 px-4 py-2.5 font-semibold text-slate-950 transition hover:bg-cyan-400"
-              >
-                Start Fresh Match
-              </button>
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl backdrop-blur">
-            <h2 className="mb-3 text-lg font-semibold">Progress & Stats</h2>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <p className="text-xs text-slate-400">Games</p>
-                <p className="text-lg font-bold">{stats.gamesPlayed}</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <p className="text-xs text-slate-400">Red Wins</p>
-                <p className="text-lg font-bold">{stats.redWins}</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <p className="text-xs text-slate-400">Black Wins</p>
-                <p className="text-lg font-bold">{stats.blackWins}</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <p className="text-xs text-slate-400">Captures</p>
-                <p className="text-lg font-bold">{stats.capturesRed + stats.capturesBlack}</p>
-              </div>
-            </div>
-            <div className="mt-3">
-              <div className="mb-1 flex justify-between text-xs text-slate-300">
-                <span>Level {stats.level}</span>
-                <span>{stats.xp % 120}/120 XP</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                <div className="h-full bg-cyan-400" style={{ width: `${((stats.xp % 120) / 120) * 100}%` }} />
-              </div>
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-xl backdrop-blur">
-            <h2 className="mb-3 text-lg font-semibold">Leaderboard Pulse</h2>
-            <div className="space-y-2 text-sm">
-              {leaderboard.map((entry) => (
-                <div key={entry.rank} className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                  <div>
-                    <p className="font-semibold">#{entry.rank} {entry.name}</p>
-                    <p className="text-xs text-slate-400">Win rate {entry.winRate}</p>
-                  </div>
-                  <span className="rounded-md bg-emerald-500/20 px-2 py-1 text-xs text-emerald-200">🔥 {entry.streak}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        </aside>
-      </div>
-    </div>
+    </main>
   );
 }
